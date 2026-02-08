@@ -1,4 +1,8 @@
-package com.liang.onethread.core.alarm;
+package com.liang.onethread.core.alarm.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
 /**
  * 告警配置类
@@ -21,5 +25,23 @@ package com.liang.onethread.core.alarm;
  * </ul>
  * <p>
  */
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
 public class AlarmConfig {
+
+    /**
+     * 告警配置开关，默认开启
+     */
+    private Boolean enable = Boolean.TRUE;
+
+    /**
+     * 队列告警阈值
+     */
+    private Integer threshold;
+
+    /**
+     * 活跃线程告警阈值
+     */
+    private Integer activeThreshold;
 }
