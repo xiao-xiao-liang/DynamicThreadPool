@@ -10,10 +10,14 @@
     <packaging>pom</packaging>
 
     <modules>
+        <!-- 动态线程池核心模块包，实现动态线程池相关基础类定义 -->
         <module>core</module>
+        <!-- 动态线程池基础模块包，包含Spring扫描动态线程池、是否启用以及Banner打印等 -->
+        <module>spring-base</module>
     </modules>
 
     <properties>
+        <java.version.release>25</java.version.release>
         <maven.compiler.source>25</maven.compiler.source>
         <maven.compiler.target>25</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -79,7 +83,7 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>${maven-compiler-plugin.version}</version>
                 <configuration>
-                    <release>${java.version}</release>
+                    <release>${java.version.release}</release>
                 </configuration>
             </plugin>
 
