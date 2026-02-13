@@ -8,7 +8,8 @@
         <artifactId>onethread-all</artifactId>
         <version>1.0-SNAPSHOT</version>
     </parent>
-    <artifactId>onethread-core</artifactId>
+
+    <artifactId>starter</artifactId>
 
     <properties>
         <maven.compiler.source>25</maven.compiler.source>
@@ -16,15 +17,4 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
-    <dependencies>
-        <dependency>
-            <groupId>cn.hutool</groupId>
-            <artifactId>hutool-all</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.yaml</groupId>
-            <artifactId>snakeyaml</artifactId>
-        </dependency>
-    </dependencies>
 </project>
