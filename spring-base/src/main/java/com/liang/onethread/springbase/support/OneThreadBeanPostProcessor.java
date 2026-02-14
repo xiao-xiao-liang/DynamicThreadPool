@@ -1,8 +1,13 @@
 package com.liang.onethread.springbase.support;
 
+import cn.hutool.core.lang.Assert;
+import cn.hutool.core.util.ReflectUtil;
+import com.liang.onethread.core.config.BootstrapConfigProperties;
 import com.liang.onethread.core.executor.OneThreadExecutor;
 import com.liang.onethread.core.executor.OneThreadRegistry;
 import com.liang.onethread.core.executor.ThreadPoolExecutorProperties;
+import com.liang.onethread.core.executor.support.BlockingQueueTypeEnum;
+import com.liang.onethread.core.executor.support.RejectedPolicyTypeEnum;
 import com.liang.onethread.springbase.DynamicThreadPool;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
@@ -36,6 +41,8 @@ import java.util.concurrent.TimeUnit;
 @RequiredArgsConstructor
 public class OneThreadBeanPostProcessor implements BeanPostProcessor {
 
+    private final BootstrapConfigProperties properties;
+
     /**
      * 在 Bean 初始化完成后进行动态线程池的识别与注册。
      *
@@ -59,16 +66,20 @@ public class OneThreadBeanPostProcessor implements BeanPostProcessor {
         try {
             log.info("Registering dynamic thread pool: [{}], ID: [{}]", beanName, oneThreadExecutor.getThreadPoolId());
 
-            // TODO: 需要从配置中心读取动态线程池配置并对线程池进行赋值
-
             // 构建初始属性并注册
-            ThreadPoolExecutorProperties defaultProperties = buildDefaultExecutorProperties(oneThreadExecutor);
+            ThreadPoolExecutorProperties executorProperties = properties.getExecutors()
+                    .stream()
+                    .filter(item -> Objects.equals(oneThreadExecutor.getThreadPoolId(), item.getThreadPoolId()))
+                    .findFirst()
+                    .orElseThrow(() -> new RuntimeException("The thread pool id does not exist in the configuration."));
 
+            overrideLocalThreadPoolConfig(executorProperties, oneThreadExecutor);
+            
             // 注册到动态线程池注册器
             OneThreadRegistry.putHolder(
                     oneThreadExecutor.getThreadPoolId(),
                     oneThreadExecutor,
-                    defaultProperties
+                    executorProperties
             );
         } catch (Exception ex) {
             log.error("Failed to register dynamic thread pool for bean: [{}]", beanName, ex);
@@ -77,29 +88,31 @@ public class OneThreadBeanPostProcessor implements BeanPostProcessor {
         return bean;
     }
 
-    /**
-     * 基于线程池当前运行时状态，构建其默认属性快照。
-     *
-     * @param executor 目标线程池实例
-     * @return 包含核心线程数、最大线程数、队列类型及容量等参数的属性快照
-     */
-    private ThreadPoolExecutorProperties buildDefaultExecutorProperties(OneThreadExecutor executor) {
-        BlockingQueue<Runnable> blockingQueue = executor.getQueue();
+    private void overrideLocalThreadPoolConfig(ThreadPoolExecutorProperties executorProperties, OneThreadExecutor oneThreadExecutor) {
+        Integer remoteCorePoolSize = executorProperties.getCorePoolSize();
+        Integer remoteMaximumPoolSize = executorProperties.getMaximumPoolSize();
+        Assert.isTrue(remoteCorePoolSize <= remoteMaximumPoolSize, "remoteCorePoolSize must be smaller than remoteMaximumPoolSize.");
 
-        // 队列相关参数计算
-        int queueSize = blockingQueue.size();
-        String queueType = blockingQueue.getClass().getSimpleName();
-        int remainingCapacity = blockingQueue.remainingCapacity();
-        int queueCapacity = queueSize + remainingCapacity;
+        int originMaximumPoolSize = oneThreadExecutor.getMaximumPoolSize();
+        if (remoteMaximumPoolSize > originMaximumPoolSize) {
+            executorProperties.setMaximumPoolSize(remoteMaximumPoolSize);
+            executorProperties.setCorePoolSize(remoteCorePoolSize);
+        } else {
+            executorProperties.setCorePoolSize(remoteCorePoolSize);
+            executorProperties.setMaximumPoolSize(remoteMaximumPoolSize);
+        }
 
-        return new ThreadPoolExecutorProperties()
-                .setCorePoolSize(executor.getCorePoolSize())
-                .setMaximumPoolSize(executor.getMaximumPoolSize())
-                .setAllowCoreThreadTimeOut(executor.allowsCoreThreadTimeOut())
-                .setKeepAliveTime(executor.getKeepAliveTime(TimeUnit.SECONDS))
-                .setWorkQueue(queueType)
-                .setQueueCapacity(queueCapacity)
-                .setRejectedHandler(executor.getRejectedExecutionHandler().getClass().getSimpleName())
-                .setThreadPoolId(executor.getThreadPoolId());
+        // 阻塞队列没有常规 set 方法，通过反射赋值
+        var workQueue = BlockingQueueTypeEnum.createBlockingQueue(executorProperties.getWorkQueue(), executorProperties.getQueueCapacity());
+        // Java 9+ 的模块系统（JPMS）默认禁止通过反射访问 JDK 内部 API 的私有字段，所以需要配置开放反射权限
+        // 在启动命令中增加以下参数，显式开放 java.util.concurrent 包
+        // IDE 中通过在 VM options 中添加参数：--add-opens=java.base/java.util.concurrent=ALL-UNNAMED
+        // 部署的时候，在启动脚本（如 java -jar 命令）中加入该参数：java -jar --add-opens=java.base/java.util.concurrent=ALL-UNNAMED your-app.jar
+        ReflectUtil.setFieldValue(oneThreadExecutor, "workQueue", workQueue);
+
+        // 赋值动态线程池其他核心参数
+        oneThreadExecutor.setKeepAliveTime(executorProperties.getKeepAliveTime(), TimeUnit.SECONDS);
+        oneThreadExecutor.allowCoreThreadTimeOut(executorProperties.getAllowCoreThreadTimeOut());
+        oneThreadExecutor.setRejectedExecutionHandler(RejectedPolicyTypeEnum.createPolicy(executorProperties.getRejectedHandler()));
     }
 }
