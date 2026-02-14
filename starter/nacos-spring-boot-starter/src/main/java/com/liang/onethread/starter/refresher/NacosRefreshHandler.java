@@ -1,12 +1,17 @@
 package com.liang.onethread.starter.refresher;
 
+import cn.hutool.core.collection.CollUtil;
 import com.alibaba.cloud.nacos.NacosConfigManager;
 import com.alibaba.nacos.api.config.ConfigService;
 import com.alibaba.nacos.api.config.listener.Listener;
 import com.alibaba.nacos.api.exception.NacosException;
 import com.liang.onethread.core.config.BootstrapConfigProperties;
 import com.liang.onethread.core.config.center.NacosConfig;
+import com.liang.onethread.core.executor.OneThreadRegistry;
+import com.liang.onethread.core.executor.ThreadPoolExecutorHolder;
+import com.liang.onethread.core.executor.ThreadPoolExecutorProperties;
 import com.liang.onethread.core.executor.support.BlockingQueueTypeEnum;
+import com.liang.onethread.core.executor.support.RejectedPolicyTypeEnum;
 import com.liang.onethread.core.parser.ConfigParserHandler;
 import com.liang.onethread.core.tookit.ThreadPoolExecutorBuilder;
 import lombok.RequiredArgsConstructor;
@@ -19,8 +24,11 @@ import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
 
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionHandler;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Nacos 监听器，用于监听 Nacos 配置文件变化并实时更新动态线程池参数。
@@ -68,8 +76,8 @@ public class NacosRefreshHandler implements ApplicationRunner {
         NacosConfig nacosConfig = properties.getNacos();
         // 添加监听器，指定 DataId 和 Group
         configService.addListener(nacosConfig.getDataId(), nacosConfig.getGroup(), new Listener() {
-             // 提供用于执行回调任务的 Executor。
-             // 为了避免阻塞 Nacos 内部线程或主线程，这里提供一个独立的线程池来处理配置变更事件。该线程池配置为单线程，使用同步队列。
+            // 提供用于执行回调任务的 Executor。
+            // 为了避免阻塞 Nacos 内部线程或主线程，这里提供一个独立的线程池来处理配置变更事件。该线程池配置为单线程，使用同步队列。
             @Override
             public Executor getExecutor() {
                 return ThreadPoolExecutorBuilder.builder()
@@ -92,11 +100,80 @@ public class NacosRefreshHandler implements ApplicationRunner {
                 Binder binder = new Binder(sources);
                 // 绑定配置到 BootstrapConfigProperties，更新内存中的配置对象
                 BootstrapConfigProperties refreshProperties = binder.bind(BootstrapConfigProperties.PREFIX, Bindable.ofInstance(properties)).get();
-                log.info("Listen for changes in the Nacos configuration file: {}", refreshProperties);
 
-                // TODO 刷新动态线程池对象核心参数
+                // 检查远程配置文件是否包含线程池配置
+                if (CollUtil.isEmpty(properties.getExecutors()))
+                    return;
+
+                // 刷新动态线程池对象核心参数
+                for (ThreadPoolExecutorProperties remoteProperties : refreshProperties.getExecutors()) {
+                    // 检查线程池配置是否发生变化（与当前内存中的配置对比）
+                    boolean changed = hasThreadPoolConfigChanged(remoteProperties);
+                    if (!changed) continue;
+
+                    // 将远程配置应用到到线程池，更新相关参数
+                    updateThreadPoolFromRemoteConfig(remoteProperties);
+
+                }
             }
         });
         log.info("Dynamic thread pool refresher, add nacos cloud listener success. data-id: {}, group: {}", nacosConfig.getDataId(), nacosConfig.getGroup());
+    }
+
+    private void updateThreadPoolFromRemoteConfig(ThreadPoolExecutorProperties remoteProperties) {
+        String threadPoolId = remoteProperties.getThreadPoolId();
+        ThreadPoolExecutorHolder holder = OneThreadRegistry.getHolder(threadPoolId);
+        ThreadPoolExecutor executor = holder.getExecutor();
+        ThreadPoolExecutorProperties originalProperties = holder.getExecutorProperties();
+
+        int remoteCorePoolSize = executor.getCorePoolSize();
+        int remoteMaximumPoolSize = executor.getMaximumPoolSize();
+        if (remoteCorePoolSize > originalProperties.getMaximumPoolSize()) {
+            executor.setMaximumPoolSize(remoteMaximumPoolSize);
+            executor.setCorePoolSize(remoteCorePoolSize);
+        } else {
+            executor.setCorePoolSize(remoteCorePoolSize);
+            executor.setMaximumPoolSize(remoteMaximumPoolSize);
+        }
+
+        Boolean remoteParam = remoteProperties.getAllowCoreThreadTimeOut();
+        Boolean originalParam = originalProperties.getAllowCoreThreadTimeOut();
+        if (remoteParam != null && !Objects.equals(remoteParam, originalParam))
+            executor.allowCoreThreadTimeOut(remoteParam);
+
+        String remoteRejectedHandler = remoteProperties.getRejectedHandler();
+        if (remoteRejectedHandler != null && !Objects.equals(remoteRejectedHandler, originalProperties.getRejectedHandler())) {
+            RejectedExecutionHandler handler = RejectedPolicyTypeEnum.createPolicy(remoteRejectedHandler);
+            executor.setRejectedExecutionHandler(handler);
+        }
+
+        Long remoteKeepAliveTime = remoteProperties.getKeepAliveTime();
+        if (remoteKeepAliveTime != null && !Objects.equals(remoteKeepAliveTime, originalProperties.getKeepAliveTime()))
+            executor.setKeepAliveTime(remoteKeepAliveTime, TimeUnit.SECONDS);
+    }
+
+    private boolean hasThreadPoolConfigChanged(ThreadPoolExecutorProperties remoteProperties) {
+        String threadPoolId = remoteProperties.getThreadPoolId();
+        ThreadPoolExecutorHolder holder = OneThreadRegistry.getHolder(threadPoolId);
+        if (holder == null) {
+            log.warn("No thread pool found for thread pool id: {}", threadPoolId);
+            return false;
+        }
+        ThreadPoolExecutor executor = holder.getExecutor();
+        ThreadPoolExecutorProperties originalProperties = holder.getExecutorProperties();
+
+        return hasDifference(originalProperties, remoteProperties, executor);
+    }
+
+    private boolean hasDifference(ThreadPoolExecutorProperties originalProperties, ThreadPoolExecutorProperties remoteProperties, ThreadPoolExecutor executor) {
+        return isChanged(originalProperties.getCorePoolSize(), remoteProperties.getCorePoolSize())
+                || isChanged(originalProperties.getMaximumPoolSize(), remoteProperties.getMaximumPoolSize())
+                || isChanged(originalProperties.getAllowCoreThreadTimeOut(), remoteProperties.getAllowCoreThreadTimeOut())
+                || isChanged(originalProperties.getKeepAliveTime(), remoteProperties.getKeepAliveTime())
+                || isChanged(originalProperties.getRejectedHandler(), remoteProperties.getRejectedHandler());
+    }
+
+    private <T> boolean isChanged(T before, T after) {
+        return after != null && !Objects.equals(before, after);
     }
 }
