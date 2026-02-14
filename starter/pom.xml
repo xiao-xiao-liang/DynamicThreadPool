@@ -9,12 +9,12 @@
         <version>1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>starter</artifactId>
-
-    <properties>
-        <maven.compiler.source>25</maven.compiler.source>
-        <maven.compiler.target>25</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    </properties>
+    <artifactId>onethread-starter</artifactId>
+    <packaging>pom</packaging>
+    
+    <modules>
+        <module>nacos-spring-boot-starter</module>
+        <module>common-spring-boot-starter</module>
+    </modules>
 
 </project>

@@ -1,5 +1,6 @@
 package com.liang.onethread.springbase.config;
 
+import com.liang.onethread.core.config.BootstrapConfigProperties;
 import com.liang.onethread.springbase.support.OneThreadBeanPostProcessor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -24,7 +25,7 @@ public class OneThreadBaseConfig {
      * 注解的线程池实例，并将其注册到全局注册中心。</p>
      */
     @Bean
-    public OneThreadBeanPostProcessor oneThreadBeanPostProcessor() {
-        return new OneThreadBeanPostProcessor();
+    public OneThreadBeanPostProcessor oneThreadBeanPostProcessor(BootstrapConfigProperties properties) {
+        return new OneThreadBeanPostProcessor(properties);
     }
 }
